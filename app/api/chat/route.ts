@@ -1,4 +1,5 @@
 import { streamText, tool } from "ai"
+import { openai } from "@ai-sdk/openai"
 import { z } from "zod"
 import { query } from "@/lib/db"
 
@@ -115,7 +116,7 @@ export async function POST(req: Request) {
     const { messages } = await req.json()
 
     const result = streamText({
-      model: "openai/gpt-4o-mini",
+      model: openai("gpt-4o-mini"),
       messages,
       system: `Eres Hogarcito, un agente inmobiliario virtual profesional y amigable de Your Business House en Venezuela. Hablas como un venezolano cercano y empático.
 

@@ -13,6 +13,7 @@ export function HeroSection() {
   const [maxPrice, setMaxPrice] = useState("")
   const [bedrooms, setBedrooms] = useState("")
   const [bathrooms, setBathrooms] = useState("")
+  const [videoError, setVideoError] = useState(false)
   const router = useRouter()
 
   const locationInputRef = useRef<HTMLInputElement>(null)
@@ -71,15 +72,28 @@ export function HeroSection() {
   return (
     <section className="relative min-h-screen pt-16 sm:pt-20 pb-8 sm:pb-12 overflow-hidden">
       <div className="absolute inset-0 z-0">
-        <video autoPlay muted loop playsInline className="w-full h-full object-cover">
-          <source src="/herohome.MP4" type="video/mp4" />
-          {/* Fallback image if video doesn't load */}
-          <img
-            src="/modern-luxury-real-estate-property-background.jpg"
-            alt="Fondo de inmuebles modernos"
+        {!videoError ? (
+          <video
+            autoPlay
+            muted
+            loop
+            playsInline
             className="w-full h-full object-cover"
-          />
-        </video>
+            onError={() => setVideoError(true)}
+          >
+            <source src="/herohome.mp4" type="video/mp4" />
+          </video>
+        ) : null}
+        {/* Fallback image - always shown as background layer */}
+        <img
+          src="/agents-hero-patio.png"
+          alt="Fondo de inmuebles modernos"
+          className={`absolute inset-0 w-full h-full object-cover ${!videoError ? "hidden" : ""}`}
+        />
+        {/* Show image if video fails */}
+        {videoError && (
+          <img src="/agents-hero-patio.png" alt="Fondo de inmuebles modernos" className="w-full h-full object-cover" />
+        )}
         <div className="absolute inset-0 bg-gradient-to-r from-black/70 via-black/50 to-black/30" />
       </div>
 
