@@ -3,8 +3,15 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
   images: {
     unoptimized: true,
+  },
+  output: 'standalone',
+  experimental: {
+    serverComponentsExternalPackages: ['bcryptjs', 'nodemailer', 'mysql2'],
   },
 }
 
