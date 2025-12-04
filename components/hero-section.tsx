@@ -81,7 +81,7 @@ export function HeroSection() {
             className="w-full h-full object-cover"
             onError={() => setVideoError(true)}
           >
-            <source src="/herohome.mp4" type="video/mp4" />
+            <source src="/herohome.MP4" type="video/mp4" />
           </video>
         ) : null}
         {/* Fallback image - always shown as background layer */}

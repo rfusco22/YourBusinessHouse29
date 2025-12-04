@@ -179,7 +179,7 @@ REGLAS IMPORTANTES:
       maxSteps: 5,
     })
 
-    return result.toUIMessageStreamResponse()
+    return result.toDataStreamResponse()
   } catch (error) {
     console.error("Error in chat API:", error)
     return new Response(JSON.stringify({ error: "Error processing request" }), {
