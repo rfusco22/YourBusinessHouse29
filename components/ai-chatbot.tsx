@@ -2,7 +2,6 @@
 import { useState, useRef, useEffect } from "react"
 import type React from "react"
 import { useChat } from "@ai-sdk/react"
-import { DefaultChatTransport } from "ai"
 import { Button } from "@/components/ui/button"
 import { X, MessageCircle, Send, Loader2 } from "lucide-react"
 import Image from "next/image"
@@ -27,25 +26,17 @@ export function AIChatbot() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const [hasShownQuickReplies, setHasShownQuickReplies] = useState(false)
 
-  const { messages, input, setInput, status, sendMessage } = useChat({
-    transport: new DefaultChatTransport({ api: "/api/chat" }),
+  const { messages, input, setInput, handleSubmit, append, isLoading } = useChat({
+    api: "/api/chat",
     initialMessages: [
       {
         id: "welcome",
         role: "assistant",
         content:
           "¡Hola! Soy Hogarcito, tu agente inmobiliario virtual. Estoy aquí para ayudarte a encontrar tu próximo hogar en cualquier parte de Venezuela. ¿Estás buscando comprar o alquilar?",
-        parts: [
-          {
-            type: "text",
-            text: "¡Hola! Soy Hogarcito, tu agente inmobiliario virtual. Estoy aquí para ayudarte a encontrar tu próximo hogar en cualquier parte de Venezuela. ¿Estás buscando comprar o alquilar?",
-          },
-        ],
       },
     ],
   })
-
-  const isLoading = status === "streaming" || status === "submitted"
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -55,17 +46,16 @@ export function AIChatbot() {
     scrollToBottom()
   }, [messages])
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const onSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!input.trim() || isLoading) return
     setHasShownQuickReplies(true)
-    sendMessage({ text: input })
-    setInput("")
+    handleSubmit(e)
   }
 
   const handleQuickReply = (text: string) => {
     setHasShownQuickReplies(true)
-    sendMessage({ text })
+    append({ role: "user", content: text })
   }
 
   const handlePropertyClick = (propertyId: number) => {
@@ -80,10 +70,10 @@ export function AIChatbot() {
   const getPropertiesFromMessages = () => {
     const properties: any[] = []
     for (const message of messages) {
-      if (message.parts) {
-        for (const part of message.parts) {
-          if (part.type === "tool-searchProperties" && "output" in part && part.output?.properties) {
-            properties.push(...part.output.properties)
+      if (message.toolInvocations) {
+        for (const tool of message.toolInvocations) {
+          if (tool.toolName === "searchProperties" && tool.state === "result" && tool.result?.properties) {
+            properties.push(...tool.result.properties)
           }
         }
       }
@@ -92,17 +82,6 @@ export function AIChatbot() {
   }
 
   const properties = getPropertiesFromMessages()
-
-  const getMessageText = (message: any): string => {
-    if (message.content) return message.content
-    if (message.parts) {
-      return message.parts
-        .filter((p: any) => p.type === "text")
-        .map((p: any) => p.text)
-        .join("")
-    }
-    return ""
-  }
 
   return (
     <>
@@ -160,8 +139,7 @@ export function AIChatbot() {
 
           <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-2 sm:space-y-3 bg-gradient-to-b from-background via-background to-accent/5 scrollbar-thin scrollbar-thumb-primary/30 scrollbar-track-transparent">
             {messages.map((msg, idx) => {
-              const messageText = getMessageText(msg)
-              if (!messageText) return null
+              if (!msg.content) return null
 
               return (
                 <div
@@ -175,7 +153,7 @@ export function AIChatbot() {
                         : "bg-card text-foreground border border-border/50 rounded-2xl rounded-bl-sm shadow-sm"
                     } px-3 sm:px-4 py-2 sm:py-2.5 text-xs sm:text-sm`}
                   >
-                    <div className="whitespace-pre-wrap break-words">{messageText}</div>
+                    <div className="whitespace-pre-wrap break-words">{msg.content}</div>
 
                     {idx === 0 && msg.role === "assistant" && !hasShownQuickReplies && (
                       <div className="flex gap-2 mt-2 sm:mt-3 flex-wrap">
@@ -264,7 +242,7 @@ export function AIChatbot() {
           </div>
 
           <div className="flex-shrink-0 border-t border-border/30 p-2 sm:p-3 bg-background/95 backdrop-blur-sm">
-            <form onSubmit={handleSubmit} className="flex gap-2 items-center">
+            <form onSubmit={onSubmit} className="flex gap-2 items-center">
               <input
                 type="text"
                 value={input}

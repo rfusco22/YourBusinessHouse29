@@ -1,4 +1,4 @@
-import { streamText, tool, convertToModelMessages, type UIMessage } from "ai"
+import { streamText, tool } from "ai"
 import { z } from "zod"
 import { query } from "@/lib/db"
 
@@ -7,7 +7,7 @@ export const maxDuration = 60
 const searchPropertiesTool = tool({
   description:
     "Busca propiedades inmobiliarias en toda Venezuela basándose en los criterios del usuario. Usa esta herramienta cuando tengas suficiente información sobre qué busca el cliente (operación, ubicación o presupuesto).",
-  inputSchema: z.object({
+  parameters: z.object({
     operationType: z.enum(["compra", "alquiler"]).optional().describe("Tipo de operación: compra o alquiler"),
     location: z
       .string()
@@ -25,16 +25,6 @@ const searchPropertiesTool = tool({
     bathrooms: z.number().optional().describe("Número mínimo de baños"),
   }),
   execute: async ({ operationType, location, maxPrice, minPrice, propertyType, bedrooms, bathrooms }) => {
-    console.log("[v0] Executing searchProperties tool with:", {
-      operationType,
-      location,
-      maxPrice,
-      minPrice,
-      propertyType,
-      bedrooms,
-      bathrooms,
-    })
-
     try {
       let sqlQuery = `
         SELECT i.*, u.name as owner_name, u.phone as owner_phone
@@ -82,7 +72,6 @@ const searchPropertiesTool = tool({
       sqlQuery += ` ORDER BY i.created_at DESC LIMIT 5`
 
       const properties = (await query(sqlQuery, params)) as any[]
-      console.log("[v0] Found properties:", properties.length)
 
       const propertiesWithImages = await Promise.all(
         properties.map(async (p: any) => {
@@ -111,7 +100,7 @@ const searchPropertiesTool = tool({
         count: propertiesWithImages.length,
       }
     } catch (error) {
-      console.error("[v0] Database error:", error)
+      console.error("Database error:", error)
       return {
         properties: [],
         count: 0,
@@ -121,20 +110,13 @@ const searchPropertiesTool = tool({
   },
 })
 
-const tools = {
-  searchProperties: searchPropertiesTool,
-}
-
 export async function POST(req: Request) {
   try {
-    console.log("[v0] Chat API called")
-
-    const { messages }: { messages: UIMessage[] } = await req.json()
-    console.log("[v0] Received messages:", messages.length)
+    const { messages } = await req.json()
 
     const result = streamText({
       model: "openai/gpt-4o-mini",
-      messages: convertToModelMessages(messages),
+      messages,
       system: `Eres Hogarcito, un agente inmobiliario virtual profesional y amigable de Your Business House en Venezuela. Hablas como un venezolano cercano y empático.
 
 TU OBJETIVO PRINCIPAL:
@@ -190,13 +172,15 @@ REGLAS IMPORTANTES:
 - Adapta la conversación al contexto
 - Si cambian de intención (alquiler→compra), reacciona y busca de nuevo
 - Siempre busca automatizar el proceso hacia la cita`,
-      tools,
+      tools: {
+        searchProperties: searchPropertiesTool,
+      },
       maxSteps: 5,
     })
 
     return result.toUIMessageStreamResponse()
   } catch (error) {
-    console.error("[v0] Error in chat API:", error)
+    console.error("Error in chat API:", error)
     return new Response(JSON.stringify({ error: "Error processing request" }), {
       status: 500,
       headers: { "Content-Type": "application/json" },
