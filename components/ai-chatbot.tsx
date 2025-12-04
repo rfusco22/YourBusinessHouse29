@@ -1,6 +1,8 @@
 "use client"
 import { useState, useRef, useEffect } from "react"
 import type React from "react"
+import { useChat } from "@ai-sdk/react"
+import { DefaultChatTransport } from "ai"
 import { Button } from "@/components/ui/button"
 import { X, MessageCircle, Send, Loader2 } from "lucide-react"
 import Image from "next/image"
@@ -20,28 +22,30 @@ function WhatsAppIcon() {
   )
 }
 
-interface Message {
-  id: string
-  role: "user" | "assistant"
-  content: string
-  toolInvocations?: any[]
-}
-
 export function AIChatbot() {
   const [isOpen, setIsOpen] = useState(false)
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "welcome",
-      role: "assistant",
-      content:
-        "¡Hola! 👋 Soy Hogarcito, tu agente inmobiliario virtual. Estoy aquí para ayudarte a encontrar tu próximo hogar en cualquier parte de Venezuela. ¿Estás buscando comprar o alquilar?",
-    },
-  ])
-  const [input, setInput] = useState("")
-  const [isLoading, setIsLoading] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const [properties, setProperties] = useState<any[]>([])
   const [hasShownQuickReplies, setHasShownQuickReplies] = useState(false)
+
+  const { messages, input, setInput, status, sendMessage } = useChat({
+    transport: new DefaultChatTransport({ api: "/api/chat" }),
+    initialMessages: [
+      {
+        id: "welcome",
+        role: "assistant",
+        content:
+          "¡Hola! Soy Hogarcito, tu agente inmobiliario virtual. Estoy aquí para ayudarte a encontrar tu próximo hogar en cualquier parte de Venezuela. ¿Estás buscando comprar o alquilar?",
+        parts: [
+          {
+            type: "text",
+            text: "¡Hola! Soy Hogarcito, tu agente inmobiliario virtual. Estoy aquí para ayudarte a encontrar tu próximo hogar en cualquier parte de Venezuela. ¿Estás buscando comprar o alquilar?",
+          },
+        ],
+      },
+    ],
+  })
+
+  const isLoading = status === "streaming" || status === "submitted"
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -51,151 +55,17 @@ export function AIChatbot() {
     scrollToBottom()
   }, [messages])
 
-  const sendMessage = async (userMessage: string) => {
-    if (!userMessage.trim()) return
-
-    const newUserMessage: Message = {
-      id: `user-${Date.now()}`,
-      role: "user",
-      content: userMessage,
-    }
-
-    setMessages((prev) => [...prev, newUserMessage])
-    setInput("")
-    setIsLoading(true)
-    setHasShownQuickReplies(true)
-
-    setProperties([])
-
-    try {
-      console.log("[v0] Sending message to API:", userMessage)
-      console.log("[v0] Current messages count:", messages.length)
-
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: [...messages, newUserMessage].map((m) => ({
-            role: m.role,
-            content: m.content,
-          })),
-        }),
-      })
-
-      const contentType = response.headers.get("content-type")
-      console.log("[v0] Response content-type:", contentType)
-      console.log("[v0] Response status:", response.status)
-      console.log("[v0] Response headers:", Object.fromEntries(response.headers.entries()))
-
-      if (!response.ok) {
-        console.error("[v0] Response not OK, status:", response.status)
-        const errorText = await response.text()
-        console.error("[v0] Error response body:", errorText)
-        throw new Error(`HTTP error! status: ${response.status}`)
-      }
-
-      const reader = response.body?.getReader()
-      if (!reader) {
-        throw new Error("No se pudo leer la respuesta")
-      }
-
-      const decoder = new TextDecoder()
-      let accumulatedContent = ""
-      let chunksReceived = 0
-
-      const assistantMessageId = `assistant-${Date.now()}`
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: assistantMessageId,
-          role: "assistant",
-          content: "",
-        },
-      ])
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) {
-          console.log("[v0] Stream finished, total chunks:", chunksReceived)
-          break
-        }
-
-        chunksReceived++
-        const chunk = decoder.decode(value, { stream: true })
-        console.log(`[v0] Chunk #${chunksReceived} received (${chunk.length} bytes):`, chunk.substring(0, 200))
-        const lines = chunk.split("\n")
-
-        for (const line of lines) {
-          if (!line.trim() || line.trim() === "data: [DONE]") continue
-
-          try {
-            let jsonLine = line.trim()
-            if (jsonLine.startsWith("data: ")) {
-              jsonLine = jsonLine.substring(6)
-            }
-
-            if (!jsonLine || jsonLine === "[DONE]") continue
-
-            const parsed = JSON.parse(jsonLine)
-            console.log("[v0] Parsed JSON successfully:", parsed.type, parsed.content?.substring(0, 50))
-
-            if (parsed.type === "text" && parsed.content) {
-              accumulatedContent += parsed.content
-              console.log("[v0] Accumulated content length now:", accumulatedContent.length)
-              setMessages((prev) =>
-                prev.map((msg) => (msg.id === assistantMessageId ? { ...msg, content: accumulatedContent } : msg)),
-              )
-            } else if (parsed.type === "properties" && parsed.properties) {
-              console.log("[v0] Received properties:", parsed.properties.length)
-              setProperties(parsed.properties)
-            }
-          } catch (e) {
-            if (line.trim().length > 0) {
-              console.warn("[v0] Failed to parse line (not JSON):", line.substring(0, 100), "Error:", e)
-            }
-          }
-        }
-      }
-
-      console.log("[v0] Final accumulated content:", accumulatedContent)
-      console.log("[v0] Final accumulated content length:", accumulatedContent.length)
-
-      if (!accumulatedContent.trim()) {
-        console.error("[v0] No content received from AI - showing fallback message")
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === assistantMessageId
-              ? {
-                  ...msg,
-                  content:
-                    "Lo siento, no pude generar una respuesta. Por favor verifica que la variable OPENAI_API_KEY esté configurada en Railway.",
-                }
-              : msg,
-          ),
-        )
-      }
-
-      setIsLoading(false)
-    } catch (error) {
-      console.error("[v0] Error sending message:", error)
-      const errorMessage = error instanceof Error ? error.message : "Error desconocido"
-      console.error("[v0] Error details:", errorMessage)
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `error-${Date.now()}`,
-          role: "assistant",
-          content: `Disculpa, tuve un problema técnico: ${errorMessage}\n\nPor favor verifica que OPENAI_API_KEY esté configurada correctamente en Railway.`,
-        },
-      ])
-      setIsLoading(false)
-    }
-  }
-
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    sendMessage(input)
+    if (!input.trim() || isLoading) return
+    setHasShownQuickReplies(true)
+    sendMessage({ text: input })
+    setInput("")
+  }
+
+  const handleQuickReply = (text: string) => {
+    setHasShownQuickReplies(true)
+    sendMessage({ text })
   }
 
   const handlePropertyClick = (propertyId: number) => {
@@ -207,8 +77,31 @@ export function AIChatbot() {
     window.open(`https://wa.me/584244291541?text=${message}`, "_blank")
   }
 
-  const handleQuickReply = (text: string) => {
-    sendMessage(text)
+  const getPropertiesFromMessages = () => {
+    const properties: any[] = []
+    for (const message of messages) {
+      if (message.parts) {
+        for (const part of message.parts) {
+          if (part.type === "tool-searchProperties" && "output" in part && part.output?.properties) {
+            properties.push(...part.output.properties)
+          }
+        }
+      }
+    }
+    return properties
+  }
+
+  const properties = getPropertiesFromMessages()
+
+  const getMessageText = (message: any): string => {
+    if (message.content) return message.content
+    if (message.parts) {
+      return message.parts
+        .filter((p: any) => p.type === "text")
+        .map((p: any) => p.text)
+        .join("")
+    }
+    return ""
   }
 
   return (
@@ -266,43 +159,48 @@ export function AIChatbot() {
           </div>
 
           <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-2 sm:space-y-3 bg-gradient-to-b from-background via-background to-accent/5 scrollbar-thin scrollbar-thumb-primary/30 scrollbar-track-transparent">
-            {messages.map((msg, idx) => (
-              <div
-                key={msg.id}
-                className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"} animate-in fade-in slide-in-from-bottom-2 duration-300`}
-              >
-                <div
-                  className={`max-w-[85%] sm:max-w-[75%] ${
-                    msg.role === "user"
-                      ? "bg-gradient-to-br from-primary to-accent text-primary-foreground rounded-2xl rounded-br-sm shadow-lg"
-                      : "bg-card text-foreground border border-border/50 rounded-2xl rounded-bl-sm shadow-sm"
-                  } px-3 sm:px-4 py-2 sm:py-2.5 text-xs sm:text-sm`}
-                >
-                  <div className="whitespace-pre-wrap break-words">{msg.content}</div>
+            {messages.map((msg, idx) => {
+              const messageText = getMessageText(msg)
+              if (!messageText) return null
 
-                  {idx === 0 && msg.role === "assistant" && !hasShownQuickReplies && (
-                    <div className="flex gap-2 mt-2 sm:mt-3 flex-wrap">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="bg-primary/10 hover:bg-primary/20 text-primary border-primary/30 text-xs sm:text-sm py-1 sm:py-2"
-                        onClick={() => handleQuickReply("alquilar")}
-                      >
-                        alquilar
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="bg-primary/10 hover:bg-primary/20 text-primary border-primary/30 text-xs sm:text-sm py-1 sm:py-2"
-                        onClick={() => handleQuickReply("comprar")}
-                      >
-                        comprar
-                      </Button>
-                    </div>
-                  )}
+              return (
+                <div
+                  key={msg.id}
+                  className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"} animate-in fade-in slide-in-from-bottom-2 duration-300`}
+                >
+                  <div
+                    className={`max-w-[85%] sm:max-w-[75%] ${
+                      msg.role === "user"
+                        ? "bg-gradient-to-br from-primary to-accent text-primary-foreground rounded-2xl rounded-br-sm shadow-lg"
+                        : "bg-card text-foreground border border-border/50 rounded-2xl rounded-bl-sm shadow-sm"
+                    } px-3 sm:px-4 py-2 sm:py-2.5 text-xs sm:text-sm`}
+                  >
+                    <div className="whitespace-pre-wrap break-words">{messageText}</div>
+
+                    {idx === 0 && msg.role === "assistant" && !hasShownQuickReplies && (
+                      <div className="flex gap-2 mt-2 sm:mt-3 flex-wrap">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="bg-primary/10 hover:bg-primary/20 text-primary border-primary/30 text-xs sm:text-sm py-1 sm:py-2"
+                          onClick={() => handleQuickReply("Quiero alquilar")}
+                        >
+                          Alquilar
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="bg-primary/10 hover:bg-primary/20 text-primary border-primary/30 text-xs sm:text-sm py-1 sm:py-2"
+                          onClick={() => handleQuickReply("Quiero comprar")}
+                        >
+                          Comprar
+                        </Button>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
 
             {properties.length > 0 && (
               <div className="space-y-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -378,7 +276,7 @@ export function AIChatbot() {
               <Button
                 type="submit"
                 size="sm"
-                disabled={isLoading}
+                disabled={isLoading || !input.trim()}
                 className="px-2 sm:px-3 py-2 sm:py-2.5 h-auto bg-gradient-to-r from-primary to-accent hover:shadow-lg transition-all rounded-full flex items-center justify-center gap-1 sm:gap-2 flex-shrink-0"
               >
                 {isLoading ? (
