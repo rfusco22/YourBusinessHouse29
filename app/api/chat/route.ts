@@ -1,4 +1,4 @@
-import { streamText, tool } from "ai"
+import { streamText, tool, convertToModelMessages, stepCountIs } from "ai"
 import { z } from "zod"
 import { query } from "@/lib/db"
 
@@ -6,12 +6,15 @@ export const maxDuration = 60
 
 export async function POST(request: Request) {
   try {
+    console.log("[v0] Chat API called")
+
     const { messages } = await request.json()
+    console.log("[v0] Received messages:", messages.length)
 
     const searchPropertiesTool = tool({
       description:
         "Busca propiedades inmobiliarias en toda Venezuela basándose en los criterios del usuario. Usa esta herramienta cuando tengas suficiente información sobre qué busca el cliente (operación, ubicación o presupuesto).",
-      parameters: z.object({
+      inputSchema: z.object({
         operationType: z.enum(["compra", "alquiler"]).optional().describe("Tipo de operación: compra o alquiler"),
         location: z
           .string()
@@ -28,23 +31,17 @@ export async function POST(request: Request) {
         bedrooms: z.number().optional().describe("Número mínimo de habitaciones"),
         bathrooms: z.number().optional().describe("Número mínimo de baños"),
       }),
-      execute: async ({
-        operationType,
-        location,
-        maxPrice,
-        minPrice,
-        propertyType,
-        bedrooms,
-        bathrooms,
-      }: {
-        operationType?: string
-        location?: string
-        maxPrice?: number
-        minPrice?: number
-        propertyType?: string
-        bedrooms?: number
-        bathrooms?: number
-      }) => {
+      execute: async ({ operationType, location, maxPrice, minPrice, propertyType, bedrooms, bathrooms }) => {
+        console.log("[v0] Executing searchProperties tool with:", {
+          operationType,
+          location,
+          maxPrice,
+          minPrice,
+          propertyType,
+          bedrooms,
+          bathrooms,
+        })
+
         let sqlQuery = `
           SELECT i.*, u.name as owner_name, u.phone as owner_phone
           FROM inmueble i 
@@ -91,6 +88,7 @@ export async function POST(request: Request) {
         sqlQuery += ` ORDER BY i.created_at DESC LIMIT 5`
 
         const properties = (await query(sqlQuery, params)) as any[]
+        console.log("[v0] Found properties:", properties.length)
 
         const propertiesWithImages = await Promise.all(
           properties.map(async (p: any) => {
@@ -121,108 +119,125 @@ export async function POST(request: Request) {
       },
     })
 
-    const result = await Promise.race([
-      streamText({
-        model: "google/gemini-2.0-flash",
-        messages,
-        system: `Eres Hogarcito, un asesor inmobiliario virtual experto y amigable de Your Business House en Venezuela. Tu rol es guiar a los clientes de forma profesional y cercana para encontrar su propiedad ideal.
+    console.log("[v0] Calling AI model via Vercel AI Gateway...")
+
+    const result = streamText({
+      model: "openai/gpt-4o-mini", // Vercel AI Gateway handles this automatically
+      messages: convertToModelMessages(
+        messages.map((m: any) => ({
+          role: m.role,
+          content: m.content,
+        })),
+      ),
+      system: `Eres Hogarcito, un agente inmobiliario virtual profesional y amigable de Your Business House en Venezuela. Hablas como un venezolano cercano y empático.
 
 TU OBJETIVO PRINCIPAL:
-Actuar como un agente inmobiliario humano experto que asesora al cliente, entiende sus necesidades, y lo guía paso a paso hasta encontrar el inmueble perfecto y agendar una visita.
+Automatizar el proceso de venta/alquiler conversando naturalmente como un humano, guiando al cliente hasta encontrar su propiedad ideal y agendar una cita.
 
-PERSONALIDAD:
-- Hablas como un venezolano cercano, empático y profesional
-- Usas un tono amigable pero experto en bienes raíces
-- Demuestras conocimiento del mercado inmobiliario venezolano
-- Generas confianza y seguridad en el cliente
-
-FLUJO DE ASESORÍA (UNA pregunta a la vez):
+FLUJO DE CONVERSACIÓN (UNA pregunta a la vez, como humano):
 
 1. PRIMER CONTACTO:
-   - Saluda cordialmente y preséntate como asesor inmobiliario
-   - Pregunta si buscan comprar o alquilar
+   - Si dicen "hola" o saludan → Responde cordialmente y pregunta si buscan comprar o alquilar
+   - Si ya mencionan que buscan inmueble → Ve directo a preguntar tipo de operación
 
 2. OPERACIÓN (compra/alquiler):
-   - "¿Estás buscando comprar o alquilar?"
-   - Adapta tu asesoría según la respuesta
+   - Pregunta: "¿Estás buscando comprar o alquilar?"
+   - Una vez sepas, guarda esta info y continúa
 
 3. UBICACIÓN:
-   - "¿En qué zona de Venezuela te gustaría encontrar tu próximo hogar?"
-   - Conoces todas las ciudades: Caracas, Valencia, Maracaibo, Barquisimeto, Mérida, etc.
-   - Si mencionan una zona, puedes dar contexto sobre el área
+   - Pregunta: "¿En qué parte de Venezuela te gustaría tu próximo hogar?"
+   - Acepta cualquier ciudad/estado de Venezuela
+   - Ejemplos: Caracas, Valencia, Maracaibo, Barquisimeto, etc.
 
 4. PRESUPUESTO:
-   - Si es ALQUILER → "¿Cuál es tu presupuesto mensual aproximado?" (en USD)
-   - Si es COMPRA → "¿Cuál es tu rango de inversión?" (en USD)
-   - Si dan solo número, asume USD
+   - Si es ALQUILER → "¿Cuál es tu tope de canon mensual?" (en USD)
+   - Si es COMPRA → "¿Cuál es tu tope de inversión?" (en USD)
+   - Si dicen solo "280" → Asume USD y confirma
 
 5. TIPO DE INMUEBLE:
-   - "¿Qué tipo de propiedad te interesa? Tenemos apartamentos, casas, locales comerciales, oficinas, terrenos y quintas"
+   - Pregunta: "¿Qué tipo de inmueble prefieres? (apartamento, casa, local comercial, oficina, terreno, quinta)"
 
-6. CARACTERÍSTICAS (para residencial):
-   - Pregunta sobre habitaciones, baños, estacionamiento
-   - "¿Cuántas habitaciones necesitas para tu familia?"
+6. DETALLES (solo para residencial):
+   - Si es apartamento/casa → Pregunta habitaciones y baños
+   - Ejemplo: "¿Cuántas habitaciones necesitas?"
 
-7. BÚSQUEDA Y RECOMENDACIÓN:
+7. BÚSQUEDA AUTOMÁTICA:
    - EJECUTA searchProperties cuando tengas: operación + (ubicación O presupuesto)
-   - Presenta las opciones como un asesor experto, destacando beneficios
-   - Si no hay resultados exactos, sugiere alternativas
+   - Si el usuario CAMBIA de alquiler a compra → NUEVA búsqueda inmediatamente
+   - Si cambia ubicación o presupuesto → NUEVA búsqueda
 
-8. CIERRE Y SEGUIMIENTO:
-   - "¿Te gustaría que coordinemos una visita a alguna de estas propiedades?"
-   - "Puedo conectarte con uno de nuestros asesores presenciales por WhatsApp"
+8. DESPUÉS DE MOSTRAR RESULTADOS:
+   - Di: "¿Te gustaría que agende una cita con un asesor para visitar alguna?"
+   - Ofrece contactar por WhatsApp
 
-ASESORÍA EXPERTA:
-- Si preguntan sobre zonas → Da información útil sobre el área
-- Si tienen dudas sobre precios → Orienta sobre el mercado
-- Si no saben qué buscar → Haz preguntas para entender sus necesidades
-- Siempre ofrece valor agregado como asesor
+RESPONDER OTRAS PREGUNTAS:
+- Información de la empresa → CC El Añil, Valencia, Venezuela
+- Redes sociales → Instagram: @yourbusinesshouse
+- WhatsApp → +58 (424) 429-1541
+- Cobertura → Toda Venezuela
+- Si preguntan sobre servicios → Compra, venta, alquiler en toda Venezuela
 
-INFORMACIÓN DE LA EMPRESA:
-- Ubicación: CC El Añil, Valencia, Venezuela
-- Instagram: @yourbusinesshouse
-- WhatsApp: +58 (424) 429-1541
-- Cobertura: Toda Venezuela
-- Servicios: Compra, venta, alquiler de inmuebles
+REGLAS IMPORTANTES:
+- Habla breve y directo (máximo 2-3 oraciones)
+- UNA pregunta a la vez
+- NO uses muchos emojis (solo ocasionalmente)
+- Adapta la conversación al contexto
+- Si cambian de intención (alquiler→compra), reacciona y busca de nuevo
+- Siempre busca automatizar el proceso hacia la cita`,
+      tools: {
+        searchProperties: searchPropertiesTool,
+      },
+      stopWhen: stepCountIs(5), // AI SDK v5 uses stopWhen instead of maxSteps
+    })
 
-REGLAS DE COMUNICACIÓN:
-- Respuestas breves y directas (2-3 oraciones máximo)
-- UNA pregunta por mensaje
-- Tono profesional pero cercano
-- Evita emojis excesivos (usa solo ocasionalmente)
-- Siempre guía hacia el siguiente paso del proceso`,
-        tools: {
-          searchProperties: searchPropertiesTool,
-        },
-        maxSteps: 5,
-      }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("AI response timeout after 55s")), 55000)),
-    ])
+    console.log("[v0] AI model responded, creating stream...")
 
     const encoder = new TextEncoder()
     const stream = new ReadableStream({
       async start(controller) {
         try {
-          for await (const chunk of (result as any).textStream) {
+          console.log("[v0] Starting to stream text...")
+          let textChunks = 0
+
+          // Stream text chunks
+          for await (const chunk of result.textStream) {
+            textChunks++
+            console.log(`[v0] Streaming text chunk #${textChunks}:`, chunk.substring(0, 50))
             const data = JSON.stringify({ type: "text", content: chunk })
             controller.enqueue(encoder.encode(`${data}\n`))
           }
 
-          const response = await (result as any).response
+          console.log("[v0] Finished streaming text, total chunks:", textChunks)
+
+          // Send property results if any
+          const response = await result.response
           if (response.messages && response.messages.length > 0) {
-            const lastMessage = response.messages[response.messages.length - 1]
-            if (lastMessage.role === "assistant" && lastMessage.toolInvocations) {
-              for (const toolCall of lastMessage.toolInvocations) {
-                if (toolCall.toolName === "searchProperties" && toolCall.result) {
-                  const data = JSON.stringify({ type: "properties", properties: toolCall.result.properties })
-                  controller.enqueue(encoder.encode(`${data}\n`))
+            for (const message of response.messages) {
+              if (message.role === "assistant" && message.content) {
+                for (const part of message.content) {
+                  if (part.type === "tool-call" && part.toolName === "searchProperties") {
+                    // Find the corresponding tool result
+                    const toolResultMessage = response.messages.find(
+                      (m: any) => m.role === "tool" && m.content?.some((c: any) => c.toolCallId === part.toolCallId),
+                    )
+                    if (toolResultMessage) {
+                      const toolResult = toolResultMessage.content?.find((c: any) => c.toolCallId === part.toolCallId)
+                      if (toolResult?.result?.properties) {
+                        console.log("[v0] Sending property results:", toolResult.result.properties.length)
+                        const data = JSON.stringify({ type: "properties", properties: toolResult.result.properties })
+                        controller.enqueue(encoder.encode(`${data}\n`))
+                      }
+                    }
+                  }
                 }
               }
             }
           }
 
+          console.log("[v0] Stream complete, closing")
           controller.close()
         } catch (error) {
+          console.error("[v0] Stream error:", error)
           const errorData = JSON.stringify({
             type: "text",
             content: "Disculpa, tuve un problema. ¿Podrías intentarlo de nuevo?",
@@ -241,7 +256,12 @@ REGLAS DE COMUNICACIÓN:
       },
     })
   } catch (error) {
-    console.error("Error in chat API:", error)
+    console.error("[v0] Error in chat API:", error)
+    if (error instanceof Error) {
+      console.error("[v0] Error name:", error.name)
+      console.error("[v0] Error message:", error.message)
+      console.error("[v0] Error stack:", error.stack)
+    }
 
     const encoder = new TextEncoder()
     const stream = new ReadableStream({
@@ -249,7 +269,7 @@ REGLAS DE COMUNICACIÓN:
         const errorMsg = error instanceof Error ? error.message : "Error desconocido"
         const data = JSON.stringify({
           type: "text",
-          content: `Disculpa, hay un problema técnico: ${errorMsg}`,
+          content: `Disculpa, hubo un problema técnico. Por favor intenta de nuevo en unos segundos.`,
         })
         controller.enqueue(encoder.encode(`${data}\n`))
         controller.close()

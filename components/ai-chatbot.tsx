@@ -167,7 +167,8 @@ export function AIChatbot() {
             msg.id === assistantMessageId
               ? {
                   ...msg,
-                  content: "Lo siento, no pude generar una respuesta. Por favor intenta de nuevo.",
+                  content:
+                    "Lo siento, no pude generar una respuesta. Por favor verifica que la variable OPENAI_API_KEY esté configurada en Railway.",
                 }
               : msg,
           ),
@@ -185,7 +186,7 @@ export function AIChatbot() {
         {
           id: `error-${Date.now()}`,
           role: "assistant",
-          content: `Disculpa, tuve un problema técnico: ${errorMessage}. Por favor intenta de nuevo.`,
+          content: `Disculpa, tuve un problema técnico: ${errorMessage}\n\nPor favor verifica que OPENAI_API_KEY esté configurada correctamente en Railway.`,
         },
       ])
       setIsLoading(false)
